@@ -1,41 +1,228 @@
-[1] React App Load
+═══════════════════════════════════════════════════════════════
+PHASE 1: SETUP — CAMERA + CONNECTION
+═══════════════════════════════════════════════════════════════
+
+REACT (Client)                          NODE SERVER
+───────────────                          ───────────
+
+navigator.mediaDevices
+  .getUserMedia({audio,video})
         │
         ▼
-[2] Browser: getUserMedia() → camera/mic access mangta hai
+  localStream mil gaya
+  (camera/mic ka raw stream)
         │
         ▼
-[3] Socket.io connect → server se "join-room" bolta hai
+io("http://server")  ──────────────►  socket.on('connection')
+  (socket connect hota hai)               naya client connect hua
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 2: ROOM JOIN + CAPABILITIES EXCHANGE
+═══════════════════════════════════════════════════════════════
+
+socket.emit('join-room',
+   {roomId})                    ──────►  socket.on('join-room')
+                                              │
+                                              ▼
+                                          getOrCreateRoom(roomId)
+                                          router = worker.createRouter()
+                                              │
+                                              ▼
+callback({rtpCapabilities}) ◄──────────  callback({
+                                            rtpCapabilities: router.rtpCapabilities
+                                          })
         │
         ▼
-[4] Server reply karta hai: "yeh hai room ke supported audio/video formats" (rtpCapabilities)
+new Device()
+await device.load({
+  routerRtpCapabilities
+})
+   (ab browser ko pata chal gaya
+    "server kaunse audio/video
+    format support karta hai")
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 3: SEND TRANSPORT BANANA (apna video bhejne ke liye pipe)
+═══════════════════════════════════════════════════════════════
+
+socket.emit('create-transport',
+  {direction:'send'})           ──────►  socket.on('create-transport')
+                                              │
+                                              ▼
+                                          router.createWebRtcTransport()
+                                              │
+callback({id, iceParameters,    ◄────────  callback({...transport info})
+  iceCandidates, dtlsParameters})
         │
         ▼
-[5] React: mediasoup "Device" banata hai in capabilities ke saath
-        │        (yeh check karta hai ki browser in formats ko support karta hai ya nahi)
-        ▼
-[6] React: "Send Transport" banata hai
-        │        (yeh ek pipe hai — client se server tak, apna video bhejne ke liye)
-        ▼
-[7] React: apna camera/mic stream is Send Transport pe "produce" karta hai
-        │        → SERVER KO VIDEO SIRF EK BAAR JAATA HAI YAHAN
-        ▼
-[8] React: "Recv Transport" banata hai
-        │        (yeh doosra pipe hai — server se client tak, doosron ka video receive karne ke liye)
-        ▼
-[9] React: server se poochta hai "get-producers" → "room mein already kaun kaun hai?"
+device.createSendTransport(info)
+  → yeh "transport" object banta hai
+     client side pe
         │
         ▼
-[10] Server list bhejta hai existing logo ki (jinka video already aa raha hai)
+transport.on('connect', ...)
+  (yeh listener register hota hai,
+   abhi trigger nahi hua)
         │
         ▼
-[11] Har existing bande ke liye: React "consume" call karta hai
-        │        → server us bande ka stream is Recv Transport pe forward karta hai
-        │        → React use <video> tag mein daal deta hai
+transport.on('produce', ...)
+  (yeh bhi register hota hai)
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 4: PRODUCE — VIDEO SERVER KO BHEJNA (SIRF EK BAAR)
+═══════════════════════════════════════════════════════════════
+
+transport.produce({track})
+        │
         ▼
-[12] Jab BHI koi NAYA banda room join kare:
-        │        Server sabko "new-producer" event bhejta hai
-        │        React turant us naye bande ka stream bhi consume kar leta hai
+   ANDAR HI ANDAR trigger hota hai:
+        │
         ▼
-[13] Jab koi banda call chhod de:
-        │        Server "peer-left" event bhejta hai
-        │        React uska video tile hata deta hai UI se
+'connect' event fire hota hai
+  socket.emit('connect-transport',
+    {direction:'send',
+     dtlsParameters})           ──────►  socket.on('connect-transport')
+                                              │
+                                              ▼
+                                          transport.connect({dtlsParameters})
+                                              │
+callback({connected:true})      ◄────────  callback({connected:true})
+        │
+        ▼
+   phir 'produce' event fire hota hai
+  socket.emit('produce',
+    {kind, rtpParameters})      ──────►  socket.on('produce')
+                                              │
+                                              ▼
+                                          sendTransport.produce(...)
+                                          → Producer object banta hai
+                                          → peer.producers.set(id, producer)
+                                              │
+callback({id: producerId})      ◄────────  callback({id})
+        │                                    │
+        ▼                                    ▼
+  produce() ka promise resolve         socket.to(roomId).emit(
+  ho jata hai, transport.produce()        'new-producer',
+  return karta hai producer object        {producerId, socketId, kind})
+                                              │
+                                              ▼
+                                        (yeh sabko jaata hai EXCEPT
+                                         is sender ko — taaki baaki
+                                         log is naye video ko consume
+                                         kar sake)
+
+  >>> YAHAN TAK — VIDEO EK BAAR SERVER KO UPLOAD HO CHUKA <
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 5: RECV TRANSPORT BANANA (doosron ka video lene ke liye pipe)
+═══════════════════════════════════════════════════════════════
+
+(Same as Phase 3, but direction:'recv')
+
+socket.emit('create-transport',
+  {direction:'recv'})           ──────►  router.createWebRtcTransport()
+callback({...})                 ◄──────  callback({...})
+        │
+        ▼
+device.createRecvTransport(info)
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 6: EXISTING LOGO KA VIDEO CONSUME KARNA
+═══════════════════════════════════════════════════════════════
+
+socket.emit('get-producers', {}) ─────►  socket.on('get-producers')
+                                              │
+                                              ▼
+                                          room.peers loop karke
+                                          sab dusro ke producers
+                                          collect karta hai
+                                              │
+callback({producers: [...]})    ◄────────  callback({producers})
+
+  ab har producer ke liye LOOP:
+        │
+        ▼
+socket.emit('consume',
+  {producerId,
+   rtpCapabilities})            ──────►  socket.on('consume')
+                                              │
+                                              ▼
+                                          router.canConsume(...)  ✓ check
+                                          recvTransport.consume({
+                                            producerId, rtpCapabilities
+                                          })
+                                          → Consumer object banta hai
+                                              │
+callback({id, producerId,       ◄────────  callback({
+  kind, rtpParameters})                      id, producerId, kind, rtpParameters
+                                            })
+        │
+        ▼
+recvTransport.consume({...})
+  → consumer.track milta hai
+        │
+        ▼
+stream = new MediaStream()
+stream.addTrack(consumer.track)
+        │
+        ▼
+setRemoteStreams([...])
+  → React re-render hota hai
+  → <video srcObject={stream}> dikhta hai UI mein
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 7: BAAD MEIN KOI NAYA BANDA JOIN KARE
+═══════════════════════════════════════════════════════════════
+
+                                        (Naya banda Phase 1-4 karta hai)
+                                              │
+                                              ▼
+                                        socket.to(roomId).emit(
+                                          'new-producer', {...})
+        │
+        ▼
+socket.on('new-producer',
+  ({producerId, socketId}) => {
+    consume(...)   ← same Phase 6 wala function call hota hai
+  })
+        │
+        ▼
+  naye bande ka video bhi
+  turant UI mein add ho jata hai
+
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 8: KOI CALL CHHOD DE
+═══════════════════════════════════════════════════════════════
+
+socket disconnect ho jata hai   ──────►  socket.on('disconnect')
+                                              │
+                                              ▼
+                                          producer.close()
+                                          consumer.close()
+                                          transport.close()
+                                          room.peers.delete(socketId)
+                                              │
+                                              ▼
+                                        socket.to(roomId).emit(
+                                          'peer-left', {socketId})
+        │
+        ▼
+socket.on('peer-left',
+  ({socketId}) => {
+    remoteStreamsMap.delete(socketId)
+    setRemoteStreams([...])   ← video tile hat jata hai UI se
+  })
