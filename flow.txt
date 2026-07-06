@@ -1,0 +1,41 @@
+[1] React App Load
+        │
+        ▼
+[2] Browser: getUserMedia() → camera/mic access mangta hai
+        │
+        ▼
+[3] Socket.io connect → server se "join-room" bolta hai
+        │
+        ▼
+[4] Server reply karta hai: "yeh hai room ke supported audio/video formats" (rtpCapabilities)
+        │
+        ▼
+[5] React: mediasoup "Device" banata hai in capabilities ke saath
+        │        (yeh check karta hai ki browser in formats ko support karta hai ya nahi)
+        ▼
+[6] React: "Send Transport" banata hai
+        │        (yeh ek pipe hai — client se server tak, apna video bhejne ke liye)
+        ▼
+[7] React: apna camera/mic stream is Send Transport pe "produce" karta hai
+        │        → SERVER KO VIDEO SIRF EK BAAR JAATA HAI YAHAN
+        ▼
+[8] React: "Recv Transport" banata hai
+        │        (yeh doosra pipe hai — server se client tak, doosron ka video receive karne ke liye)
+        ▼
+[9] React: server se poochta hai "get-producers" → "room mein already kaun kaun hai?"
+        │
+        ▼
+[10] Server list bhejta hai existing logo ki (jinka video already aa raha hai)
+        │
+        ▼
+[11] Har existing bande ke liye: React "consume" call karta hai
+        │        → server us bande ka stream is Recv Transport pe forward karta hai
+        │        → React use <video> tag mein daal deta hai
+        ▼
+[12] Jab BHI koi NAYA banda room join kare:
+        │        Server sabko "new-producer" event bhejta hai
+        │        React turant us naye bande ka stream bhi consume kar leta hai
+        ▼
+[13] Jab koi banda call chhod de:
+        │        Server "peer-left" event bhejta hai
+        │        React uska video tile hata deta hai UI se
